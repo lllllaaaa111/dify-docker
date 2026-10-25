@@ -1,0 +1,103 @@
+name: Sync Dify images to ACR
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Target server platform
+        required: true
+        default: linux/amd64
+        type: choice
+        options:
+          - linux/amd64
+          - linux/arm64
+
+permissions: {}
+
+concurrency:
+  group: sync-dify-images-to-acr
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    strategy:
+      # 某个镜像失败时，其他镜像继续同步
+      fail-fast: false
+
+      # 最多同时同步两个镜像
+      max-parallel: 2
+
+      matrix:
+        include:
+          - source: cr.weaviate.io/semitechnologies/weaviate:1.39.13
+            target: dify-weaviate:1.39.13
+
+          - source: langgenius/dify-agent-local-sandbox:1.18.0
+            target: dify-agent-local-sandbox:1.18.0
+
+          - source: langgenius/dify-plugin-daemon:0.6.11-local
+            target: dify-plugin-daemon:0.6.11-local
+
+          - source: langgenius/dify-sandbox:0.2.15
+            target: dify-sandbox:0.2.15
+
+          - source: postgres:15-alpine
+            target: dify-postgres:15-alpine
+
+          - source: redis:6-alpine
+            target: dify-redis:6-alpine
+
+          - source: ubuntu/squid:latest
+            target: dify-squid:latest
+
+    env:
+      ACR_REGISTRY: ${{ vars.DIFY_ACR_REGISTRY }}
+      ACR_NAMESPACE: ${{ vars.DIFY_ACR_NAMESPACE }}
+      SOURCE_IMAGE: ${{ matrix.source }}
+      TARGET_IMAGE: ${{ matrix.target }}
+      IMAGE_PLATFORM: ${{ inputs.platform }}
+
+    steps:
+      - name: Login to Aliyun ACR
+        shell: bash
+        env:
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          : "${ACR_REGISTRY:?请配置 DIFY_ACR_REGISTRY}"
+          : "${ACR_NAMESPACE:?请配置 DIFY_ACR_NAMESPACE}"
+          : "${ACR_USERNAME:?请配置 ACR_USERNAME}"
+          : "${ACR_PASSWORD:?请配置 ACR_PASSWORD}"
+
+          printf '%s' "$ACR_PASSWORD" |
+            docker login "$ACR_REGISTRY" \
+              --username "$ACR_USERNAME" \
+              --password-stdin
+
+      - name: Download source image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "下载：$SOURCE_IMAGE"
+          docker pull \
+            --platform "$IMAGE_PLATFORM" \
+            "$SOURCE_IMAGE"
+
+      - name: Push image to ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          destination="$ACR_REGISTRY/$ACR_NAMESPACE/$TARGET_IMAGE"
+
+          docker tag "$SOURCE_IMAGE" "$destination"
+          docker push "$destination"
+
+          echo "同步成功：$destination"
