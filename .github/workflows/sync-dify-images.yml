@@ -2,15 +2,6 @@ name: Sync Dify images to ACR
 
 on:
   workflow_dispatch:
-    inputs:
-      platform:
-        description: Target server platform
-        required: true
-        default: linux/amd64
-        type: choice
-        options:
-          - linux/amd64
-          - linux/arm64
 
 permissions: {}
 
@@ -20,49 +11,36 @@ concurrency:
 
 jobs:
   sync:
-    name: Sync ${{ matrix.target }}
+    name: Sync ${{ matrix.image }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
     strategy:
-      # 某个镜像失败时，其他镜像继续同步
       fail-fast: false
-
-      # 最多同时同步两个镜像
       max-parallel: 2
-
       matrix:
-        include:
-          - source: cr.weaviate.io/semitechnologies/weaviate:1.39.13
-            target: dify-weaviate:1.39.13
-
-          - source: langgenius/dify-agent-local-sandbox:1.18.0
-            target: dify-agent-local-sandbox:1.18.0
-
-          - source: langgenius/dify-plugin-daemon:0.6.11-local
-            target: dify-plugin-daemon:0.6.11-local
-
-          - source: langgenius/dify-sandbox:0.2.15
-            target: dify-sandbox:0.2.15
-
-          - source: postgres:15-alpine
-            target: dify-postgres:15-alpine
-
-          - source: redis:6-alpine
-            target: dify-redis:6-alpine
-
-          - source: ubuntu/squid:latest
-            target: dify-squid:latest
+        image:
+          - busybox:latest
+          - cr.weaviate.io/semitechnologies/weaviate:1.39.13
+          - langgenius/dify-agent-backend:1.18.0
+          - langgenius/dify-agent-local-sandbox:1.18.0
+          - langgenius/dify-api:1.18.0
+          - langgenius/dify-plugin-daemon:0.6.11-local
+          - langgenius/dify-sandbox:0.2.15
+          - langgenius/dify-web:1.18.0
+          - nginx:latest
+          - postgres:15-alpine
+          - redis:6-alpine
+          - ubuntu/squid:latest
 
     env:
       ACR_REGISTRY: ${{ vars.DIFY_ACR_REGISTRY }}
       ACR_NAMESPACE: ${{ vars.DIFY_ACR_NAMESPACE }}
-      SOURCE_IMAGE: ${{ matrix.source }}
-      TARGET_IMAGE: ${{ matrix.target }}
-      IMAGE_PLATFORM: ${{ inputs.platform }}
+      SOURCE_IMAGE: ${{ matrix.image }}
+      IMAGE_PLATFORM: linux/amd64
 
     steps:
-      - name: Login to Aliyun ACR
+      - name: Login to ACR
         shell: bash
         env:
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
@@ -80,24 +58,28 @@ jobs:
               --username "$ACR_USERNAME" \
               --password-stdin
 
-      - name: Download source image
+      - name: Pull source image
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "下载：$SOURCE_IMAGE"
-          docker pull \
-            --platform "$IMAGE_PLATFORM" \
-            "$SOURCE_IMAGE"
+          docker pull --platform "$IMAGE_PLATFORM" "$SOURCE_IMAGE"
 
       - name: Push image to ACR
         shell: bash
         run: |
           set -euo pipefail
 
-          destination="$ACR_REGISTRY/$ACR_NAMESPACE/$TARGET_IMAGE"
+          name_tag="${SOURCE_IMAGE##*/}"
+
+          # 已有 dify- 前缀的保持原样，其余补上前缀
+          case "$name_tag" in
+            dify-*) ;;
+            *) name_tag="dify-$name_tag" ;;
+          esac
+
+          destination="$ACR_REGISTRY/$ACR_NAMESPACE/$name_tag"
 
           docker tag "$SOURCE_IMAGE" "$destination"
           docker push "$destination"
 
-          echo "同步成功：$destination"
+          echo "同步完成：$destination"
